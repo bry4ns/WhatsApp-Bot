@@ -4,27 +4,33 @@ const fs = require("fs");
 const { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
 const qrcode = require("qrcode-terminal");
 
-// Base de datos simulada
+// Base de datos simulada (puedes agregar más datos aquí)
 const patentesDB = {
-  "ABC123": { owner: "Juan Pérez", numero: "1234@s.whatsapp.net" },
-  "XYZ789": { owner: "María López",  numero: "5678@s.whatsapp.net" },
+  "ABC123": { owner: "Juan Pérez", status: "Vigente", numero: "56987062439@s.whatsapp.net" },
+  "XYZ789": { owner: "María López", status: "Vencido", numero: "56957908645@s.whatsapp.net" },
 };
 
-// Estado de usuarios por sesión
-const estados = {};
+// Estados por usuario
+const estadoUsuarios = {}; // { "52123456789@s.whatsapp.net": { paso: "esperando_patente", opcion: "1" } }
 
-function obtenerMenu() {
-  return `👋 ¡Hola! Soy PerBot. ¿Qué necesitas?\n\n1. Contactar a vehículo para salida\n2. Informar un problema (luces prendidas, robo, etc.)\n3. Registrar mi patente\n\nEscribe el número de la opción.`;
+// Validar si el texto parece una patente
+function esPatenteValida(texto) {
+  return /^[A-Za-z0-9]{5,7}$/.test(texto);
 }
 
-function esPatenteValida(patente) {
-  return /^[A-Za-z0-9]{5,7}$/.test(patente);
+// Consultar una patente
+function consultarPatente(patente) {
+  return patentesDB[patente.toUpperCase()] || null;
+}
+
+// Mostrar menú principal
+function obtenerMenuPrincipal() {
+  return "👋 ¡Hola! Soy PerBot. ¿Qué necesitas?\n\n1. Contactar a Vehículo para salida\n2. Informar sobre un problema (luces prendidas, robo, etc.)\n\n0. Salir / Volver al menú principal";
 }
 
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState("./auth_info");
-  const { version, isLatest } = await fetchLatestBaileysVersion();
-  console.log(`Usando Baileys versión ${version} (última: ${isLatest})`);
+  const { version } = await fetchLatestBaileysVersion();
 
   const sock = makeWASocket({
     version,
@@ -45,8 +51,11 @@ async function startBot() {
     if (connection === "close") {
       const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
       console.log(`❌ Conexión cerrada. Reintentando: ${shouldReconnect}`);
-      if (shouldReconnect) startBot();
-      else console.log("🚪 Sesión cerrada. Escanea QR de nuevo.");
+      if (shouldReconnect) {
+        startBot();
+      } else {
+        console.log("🚪 Sesión cerrada. Escanea QR de nuevo.");
+      }
     } else if (connection === "open") {
       console.log("✅ Conectado a WhatsApp!");
     }
@@ -56,116 +65,67 @@ async function startBot() {
     const message = messages[0];
     if (!message.message || message.key.fromMe) return;
 
-    const texto = message.message.conversation?.trim();
     const sender = message.key.remoteJid;
+    const userMsg = (message.message.conversation || "").trim();
 
-    if (!estados[sender]) {
-      estados[sender] = { paso: "menu", opcion: null };
-      await sock.sendMessage(sender, { text: obtenerMenu() });
+    // Inicializar estado si no existe
+    if (!estadoUsuarios[sender]) {
+      estadoUsuarios[sender] = { paso: "menu" };
+    }
+
+    const estado = estadoUsuarios[sender];
+
+    // Opción para reiniciar
+    if (userMsg === "0" || userMsg.toLowerCase().includes("volver")) {
+      estadoUsuarios[sender] = { paso: "menu" };
+      await sock.sendMessage(sender, { text: obtenerMenuPrincipal() });
       return;
     }
 
-    const estado = estados[sender];
+    switch (estado.paso) {
+      case "menu":
+        if (userMsg === "1" || userMsg === "2") {
+          estado.paso = "esperando_patente";
+          estado.opcion = userMsg;
+          await sock.sendMessage(sender, { text: "🚘 Escribe la *patente* del vehículo que deseas notificar:" });
+        } else {
+          await sock.sendMessage(sender, { text: obtenerMenuPrincipal() });
+        }
+        break;
 
-    if (texto === "0") {
-      estado.paso = "menu";
-      estado.opcion = null;
-      await sock.sendMessage(sender, { text: obtenerMenu() });
-      return;
+      case "esperando_patente":
+        if (esPatenteValida(userMsg)) {
+          const patente = userMsg.toUpperCase();
+          const datos = consultarPatente(patente);
+
+          if (datos) {
+            let textoNotificacion = "";
+
+            if (estado.opcion === "1") {
+              textoNotificacion = `🔔 *Notificación de salida requerida*\nHola, soy *PerBot*. Se necesita que muevas tu vehículo *${patente}* para permitir la salida. Gracias.`;
+            } else {
+              textoNotificacion = `🚨 *Alerta de tu vehículo*\nHola, soy *PerBot*. Se ha reportado un problema con tu vehículo *${patente}* (luces encendidas, robo, etc.). Por favor, revisa tu auto.`;
+            }
+
+            // Simulación de mensaje al propietario
+            await sock.sendMessage(datos.numero, { text: textoNotificacion });
+
+            // Confirmación al usuario que reportó
+            await sock.sendMessage(sender, { text: `✅ El propietario fue notificado correctamente.\n\n📄 *Patente:* ${patente}\n👤 *Dueño:* ${datos.owner}\n\nEscribe *0* para volver al menú.` });
+
+            estadoUsuarios[sender] = { paso: "menu" };
+          } else {
+            await sock.sendMessage(sender, { text: "❌ Patente no encontrada. Intenta con otra o escribe *0* para volver al menú." });
+          }
+        } else {
+          await sock.sendMessage(sender, { text: "⚠️ Patente inválida. Intenta de nuevo o escribe *0* para volver al menú." });
+        }
+        break;
+
+      default:
+        await sock.sendMessage(sender, { text: obtenerMenuPrincipal() });
+        estadoUsuarios[sender] = { paso: "menu" };
     }
-
-    // MENÚ PRINCIPAL
-    if (estado.paso === "menu") {
-      if (texto === "1") {
-        estado.paso = "esperando_patente";
-        estado.opcion = "1";
-        await sock.sendMessage(sender, { text: "🚗 Opción 1 seleccionada: Contactar vehículo para salida.\n✍️ Escribe la *patente* del vehículo:" });
-        return;
-      }
-
-      if (texto === "2") {
-        estado.paso = "esperando_patente";
-        estado.opcion = "2";
-        await sock.sendMessage(sender, { text: "🚨 Opción 2 seleccionada: Informar un problema.\n✍️ Escribe la *patente* del vehículo:" });
-        return;
-      }
-
-      if (texto === "3") {
-        estado.paso = "registrar_patente";
-        await sock.sendMessage(sender, { text: "📝 Opción 3 seleccionada: Registrar tu vehículo.\n✍️ Escribe la *patente* que deseas registrar:" });
-        return;
-      }
-
-      await sock.sendMessage(sender, { text: obtenerMenu() });
-      return;
-    }
-
-    // REGISTRO DE PATENTE
-    if (estado.paso === "registrar_patente") {
-      if (!esPatenteValida(texto)) {
-        await sock.sendMessage(sender, { text: "⚠️ Patente inválida. Debe tener entre 5 y 7 caracteres alfanuméricos. Intenta de nuevo o escribe *0* para volver." });
-        return;
-      }
-
-      const patente = texto.toUpperCase();
-
-      if (patentesDB[patente]) {
-        await sock.sendMessage(sender, { text: `❌ La patente *${patente}* ya está registrada.\nEscribe *0* para volver al menú.` });
-        estado.paso = "menu";
-        return;
-      }
-
-      patentesDB[patente] = {
-        owner: "Usuario registrado",
-        numero: sender
-      };
-
-      await sock.sendMessage(sender, { text: `✅ Patente *${patente}* registrada correctamente.\nEscribe *0* para volver al menú.` });
-      estado.paso = "menu";
-      return;
-    }
-
-    // CONSULTA DE PATENTE PARA OPCIONES 1 Y 2
-    if (estado.paso === "esperando_patente") {
-      if (!esPatenteValida(texto)) {
-        await sock.sendMessage(sender, { text: "⚠️ Patente inválida. Intenta de nuevo o escribe *0* para volver al menú." });
-        return;
-      }
-
-      const patente = texto.toUpperCase();
-      const data = patentesDB[patente];
-
-      if (!data) {
-        await sock.sendMessage(sender, { text: "❌ Patente no encontrada. Intenta de nuevo o escribe *0* para volver." });
-        return;
-      }
-
-      if (estado.opcion === "1") {
-        await sock.sendMessage(data.numero, {
-          text: "🚨 *Hola!* Soy PerBot.\nSe necesita que muevas tu vehículo para permitir la salida de otro automóvil."
-        });
-
-        await sock.sendMessage(sender, {
-          text: `✅ Mensaje enviado al dueño de la patente *${patente}*.\nEscribe *0* para volver al menú.`
-        });
-      }
-
-      if (estado.opcion === "2") {
-        await sock.sendMessage(data.numero, {
-          text: "🔔 *Hola!* Soy PerBot.\nTu vehículo presenta un problema reportado (luces encendidas, vidrios abajo, etc.)."
-        });
-
-        await sock.sendMessage(sender, {
-          text: `✅ El dueño de la patente *${patente}* fue notificado.\nEscribe *0* para volver al menú.`
-        });
-      }
-
-      estado.paso = "menu";
-      return;
-    }
-
-    // Si no coincide con nada
-    await sock.sendMessage(sender, { text: "⚠️ Opción no reconocida. Escribe *0* para volver al menú." });
   });
 }
 
