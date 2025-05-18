@@ -35,7 +35,11 @@ async function startBot() {
   const sock = makeWASocket({
     version,
     auth: state,
-    shouldIgnoreJid: jid => jid.endsWith('@s.whatsapp.net') && sock.user?.id.split(':')[0] === jid.split('@')[0]
+    shouldIgnoreJid: jid => {
+      // Solución al error: Verificamos que jid exista antes de usar endsWith
+      if (!jid || typeof jid !== 'string') return false;
+      return jid === (sock.user?.id || '');
+    }
   });
 
   sock.ev.on("creds.update", saveCreds);
@@ -129,4 +133,7 @@ async function startBot() {
   });
 }
 
-startBot().catch(console.error);
+startBot().catch(err => {
+  console.error("❌ Error al iniciar el bot:", err);
+  process.exit(1);
+});
