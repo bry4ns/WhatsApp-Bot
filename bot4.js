@@ -1,3 +1,33 @@
+console.log("✅ El bot se está iniciando...");
+
+const fs = require("fs");
+const { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
+const qrcode = require("qrcode-terminal");
+
+// Base de datos simulada (puedes agregar más datos aquí)
+const patentesDB = {
+  "ABC123": { owner: "Juan Pérez", status: "Vigente", numero: "56987062439@s.whatsapp.net" },
+  "XYZ789": { owner: "María López", status: "Vencido", numero: "56957908645@s.whatsapp.net" },
+};
+
+// Estados por usuario
+const estadoUsuarios = {}; // { "52123456789@s.whatsapp.net": { paso: "esperando_patente", opcion: "1" } }
+
+// Validar si el texto parece una patente
+function esPatenteValida(texto) {
+  return /^[A-Za-z0-9]{5,7}$/.test(texto);
+}
+
+// Consultar una patente
+function consultarPatente(patente) {
+  return patentesDB[patente.toUpperCase()] || null;
+}
+
+// Mostrar menú principal
+function obtenerMenuPrincipal() {
+  return "👋 ¡Hola! Soy PerBot. ¿Qué necesitas?\n\n1. Contactar a Vehículo para salida\n2. Informar sobre un problema (luces prendidas, robo, etc.)\n3. Registrar mi patente\n\n0. Salir / Volver al menú principal";
+}
+
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState("./auth_info");
   const { version } = await fetchLatestBaileysVersion();
@@ -61,7 +91,7 @@ async function startBot() {
           await sock.sendMessage(sender, { text: "🚘 Escribe la *patente* del vehículo que deseas notificar:" });
         } else if (userMsg === "3") {
           estado.paso = "registrando_patente";
-          await sock.sendMessage(sender, { text: "📝 Por favor, escribe la *patente* que deseas registrar (5-7 caracteres alfanuméricos):" });
+          await sock.sendMessage(sender, { text: "📝 Escribe la *patente* que deseas registrar (5-7 caracteres alfanuméricos):" });
         } else {
           await sock.sendMessage(sender, { text: obtenerMenuPrincipal() });
         }
@@ -126,3 +156,8 @@ async function startBot() {
     }
   });
 }
+
+startBot().catch(err => {
+  console.error("❌ Error al iniciar el bot:", err);
+  process.exit(1);
+});
