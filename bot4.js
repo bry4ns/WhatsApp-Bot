@@ -1,33 +1,3 @@
-console.log("✅ El bot se está iniciando...");
-
-const fs = require("fs");
-const { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
-const qrcode = require("qrcode-terminal");
-
-// Base de datos simulada (puedes agregar más datos aquí)
-const patentesDB = {
-  "ABC123": { owner: "Juan Pérez", status: "Vigente", numero: "56987062439@s.whatsapp.net" },
-  "XYZ789": { owner: "María López", status: "Vencido", numero: "56957908645@s.whatsapp.net" },
-};
-
-// Estados por usuario
-const estadoUsuarios = {}; // { "52123456789@s.whatsapp.net": { paso: "esperando_patente", opcion: "1" } }
-
-// Validar si el texto parece una patente
-function esPatenteValida(texto) {
-  return /^[A-Za-z0-9]{5,7}$/.test(texto);
-}
-
-// Consultar una patente
-function consultarPatente(patente) {
-  return patentesDB[patente.toUpperCase()] || null;
-}
-
-// Mostrar menú principal
-function obtenerMenuPrincipal() {
-  return "👋 ¡Hola! Soy PerBot. ¿Qué necesitas?\n\n1. Contactar a Vehículo para salida\n2. Informar sobre un problema (luces prendidas, robo, etc.)\n\n0. Salir / Volver al menú principal";
-}
-
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState("./auth_info");
   const { version } = await fetchLatestBaileysVersion();
@@ -36,7 +6,6 @@ async function startBot() {
     version,
     auth: state,
     shouldIgnoreJid: jid => {
-      // Solución al error: Verificamos que jid exista antes de usar endsWith
       if (!jid || typeof jid !== 'string') return false;
       return jid === (sock.user?.id || '');
     }
@@ -72,14 +41,12 @@ async function startBot() {
     const sender = message.key.remoteJid;
     const userMsg = (message.message.conversation || "").trim();
 
-    // Inicializar estado si no existe
     if (!estadoUsuarios[sender]) {
       estadoUsuarios[sender] = { paso: "menu" };
     }
 
     const estado = estadoUsuarios[sender];
 
-    // Opción para reiniciar
     if (userMsg === "0" || userMsg.toLowerCase().includes("volver")) {
       estadoUsuarios[sender] = { paso: "menu" };
       await sock.sendMessage(sender, { text: obtenerMenuPrincipal() });
@@ -92,9 +59,36 @@ async function startBot() {
           estado.paso = "esperando_patente";
           estado.opcion = userMsg;
           await sock.sendMessage(sender, { text: "🚘 Escribe la *patente* del vehículo que deseas notificar:" });
+        } else if (userMsg === "3") {
+          estado.paso = "registrando_patente";
+          await sock.sendMessage(sender, { text: "📝 Por favor, escribe la *patente* que deseas registrar (5-7 caracteres alfanuméricos):" });
         } else {
           await sock.sendMessage(sender, { text: obtenerMenuPrincipal() });
         }
+        break;
+
+      case "registrando_patente":
+        if (!esPatenteValida(userMsg)) {
+          await sock.sendMessage(sender, { text: "⚠️ Patente inválida. Intenta de nuevo o escribe *0* para volver." });
+          return;
+        }
+
+        const patenteNueva = userMsg.toUpperCase();
+
+        if (patentesDB[patenteNueva]) {
+          await sock.sendMessage(sender, { text: `❌ La patente *${patenteNueva}* ya está registrada.\nEscribe *0* para volver al menú.` });
+          estadoUsuarios[sender] = { paso: "menu" };
+          return;
+        }
+
+        patentesDB[patenteNueva] = {
+          owner: "Registrado vía bot",
+          numero: sender,
+          status: "Vigente"
+        };
+
+        await sock.sendMessage(sender, { text: `✅ Patente *${patenteNueva}* registrada exitosamente.\nEscribe *0* para volver al menú.` });
+        estadoUsuarios[sender] = { paso: "menu" };
         break;
 
       case "esperando_patente":
@@ -111,11 +105,11 @@ async function startBot() {
               textoNotificacion = `🚨 *Alerta de tu vehículo*\nHola, soy *PerBot*. Se ha reportado un problema con tu vehículo *${patente}* (luces encendidas, robo, etc.). Por favor, revisa tu auto.`;
             }
 
-            // Simulación de mensaje al propietario
             await sock.sendMessage(datos.numero, { text: textoNotificacion });
 
-            // Confirmación al usuario que reportó
-            await sock.sendMessage(sender, { text: `✅ El propietario fue notificado correctamente.\n\n📄 *Patente:* ${patente}\n👤 *Dueño:* ${datos.owner}\n\nEscribe *0* para volver al menú.` });
+            await sock.sendMessage(sender, {
+              text: `✅ El propietario fue notificado correctamente.\n\n📄 *Patente:* ${patente}\n👤 *Dueño:* ${datos.owner}\n\nEscribe *0* para volver al menú.`
+            });
 
             estadoUsuarios[sender] = { paso: "menu" };
           } else {
@@ -132,8 +126,3 @@ async function startBot() {
     }
   });
 }
-
-startBot().catch(err => {
-  console.error("❌ Error al iniciar el bot:", err);
-  process.exit(1);
-});
