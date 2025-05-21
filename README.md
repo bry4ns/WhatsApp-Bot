@@ -29,5 +29,4 @@
 
 ```bash
 git clone https://github.com/bry4ns/WhatsApp-Bot.git
-cd perbot
-npm install express @whiskeysockets/baileys qrcode-terminal axios
+npm install express @whiskeysockets/baileys qrcode-terminal better-sqlite3
