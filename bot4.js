@@ -1,33 +1,48 @@
-console.log("✅ El bot se está iniciando...");
-
 const fs = require("fs");
-const { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
 const qrcode = require("qrcode-terminal");
+const { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
+const Database = require("better-sqlite3");
 
-// Base de datos simulada (puedes agregar más datos aquí)
-const patentesDB = {
-  "ABC123": { owner: "Juan Pérez", status: "Vigente", numero: "56987062439@s.whatsapp.net" },
-  "XYZ789": { owner: "María López", status: "Vencido", numero: "56957908645@s.whatsapp.net" },
-};
+console.log("✅ Iniciando PerBot con SQLite...");
 
-// Estados por usuario
-const estadoUsuarios = {}; // { "52123456789@s.whatsapp.net": { paso: "esperando_patente", opcion: "1" } }
+// Crear y conectar a la base de datos
+const db = new Database("patentes.db");
 
-// Validar si el texto parece una patente
+// Crear tabla si no existe
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS patentes (
+    patente TEXT PRIMARY KEY,
+    owner TEXT,
+    numero TEXT,
+    status TEXT
+  )
+`).run();
+
+// Estado de usuarios (en memoria)
+const estadoUsuarios = {};
+
+// Validaciones
 function esPatenteValida(texto) {
   return /^[A-Za-z0-9]{5,7}$/.test(texto);
 }
 
-// Consultar una patente
-function consultarPatente(patente) {
-  return patentesDB[patente.toUpperCase()] || null;
+// Base de datos: funciones
+function agregarPatente(patente, owner, numero, status = "Vigente") {
+  const stmt = db.prepare("INSERT INTO patentes (patente, owner, numero, status) VALUES (?, ?, ?, ?)");
+  stmt.run(patente.toUpperCase(), owner, numero, status);
 }
 
-// Mostrar menú principal
+function buscarPatente(patente) {
+  const stmt = db.prepare("SELECT * FROM patentes WHERE patente = ?");
+  return stmt.get(patente.toUpperCase());
+}
+
+// Menú
 function obtenerMenuPrincipal() {
-  return "👋 ¡Hola! Soy PerBot. ¿Qué necesitas?\n\n1. Contactar a Vehículo para salida\n2. Informar sobre un problema (luces prendidas, robo, etc.)\n3. Registrar mi patente\n\n0. Salir / Volver al menú principal";
+  return "👋 ¡Hola! Soy PerBot. ¿Qué necesitas?\n\n1. Contactar a Vehículo para salida\n2. Informar sobre un problema\n3. Registrar mi patente\n\n0. Salir / Volver al menú principal";
 }
 
+// Bot
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState("./auth_info");
   const { version } = await fetchLatestBaileysVersion();
@@ -35,17 +50,12 @@ async function startBot() {
   const sock = makeWASocket({
     version,
     auth: state,
-    shouldIgnoreJid: jid => {
-      if (!jid || typeof jid !== 'string') return false;
-      return jid === (sock.user?.id || '');
-    }
+    shouldIgnoreJid: jid => !jid || typeof jid !== 'string' ? false : jid === (sock.user?.id || '')
   });
 
   sock.ev.on("creds.update", saveCreds);
 
-  sock.ev.on("connection.update", (update) => {
-    const { connection, lastDisconnect, qr } = update;
-
+  sock.ev.on("connection.update", ({ connection, lastDisconnect, qr }) => {
     if (qr) {
       console.log("📲 Escanea este QR para conectar:");
       qrcode.generate(qr, { small: true });
@@ -54,11 +64,8 @@ async function startBot() {
     if (connection === "close") {
       const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
       console.log(`❌ Conexión cerrada. Reintentando: ${shouldReconnect}`);
-      if (shouldReconnect) {
-        startBot();
-      } else {
-        console.log("🚪 Sesión cerrada. Escanea QR de nuevo.");
-      }
+      if (shouldReconnect) startBot();
+      else console.log("🚪 Sesión cerrada. Escanea QR de nuevo.");
     } else if (connection === "open") {
       console.log("✅ Conectado a WhatsApp!");
     }
@@ -105,49 +112,46 @@ async function startBot() {
 
         const patenteNueva = userMsg.toUpperCase();
 
-        if (patentesDB[patenteNueva]) {
-          await sock.sendMessage(sender, { text: `❌ La patente *${patenteNueva}* ya está registrada.\nEscribe *0* para volver al menú.` });
+        if (buscarPatente(patenteNueva)) {
+          await sock.sendMessage(sender, { text: `❌ La patente *${patenteNueva}* ya está registrada.` });
           estadoUsuarios[sender] = { paso: "menu" };
           return;
         }
 
-        patentesDB[patenteNueva] = {
-          owner: "Registrado vía bot",
-          numero: sender,
-          status: "Vigente"
-        };
-
-        await sock.sendMessage(sender, { text: `✅ Patente *${patenteNueva}* registrada exitosamente.\nEscribe *0* para volver al menú.` });
+        agregarPatente(patenteNueva, "Registrado vía bot", sender);
+        await sock.sendMessage(sender, { text: `✅ Patente *${patenteNueva}* registrada exitosamente.` });
         estadoUsuarios[sender] = { paso: "menu" };
         break;
 
       case "esperando_patente":
-        if (esPatenteValida(userMsg)) {
-          const patente = userMsg.toUpperCase();
-          const datos = consultarPatente(patente);
-
-          if (datos) {
-            let textoNotificacion = "";
-
-            if (estado.opcion === "1") {
-              textoNotificacion = `🔔 *Notificación de salida requerida*\nHola, soy *PerBot*. Se necesita que muevas tu vehículo *${patente}* para permitir la salida. Gracias.`;
-            } else {
-              textoNotificacion = `🚨 *Alerta de tu vehículo*\nHola, soy *PerBot*. Se ha reportado un problema con tu vehículo *${patente}* (luces encendidas, robo, etc.). Por favor, revisa tu auto.`;
-            }
-
-            await sock.sendMessage(datos.numero, { text: textoNotificacion });
-
-            await sock.sendMessage(sender, {
-              text: `✅ El propietario fue notificado correctamente.\n\n📄 *Patente:* ${patente}\n👤 *Dueño:* ${datos.owner}\n\nEscribe *0* para volver al menú.`
-            });
-
-            estadoUsuarios[sender] = { paso: "menu" };
-          } else {
-            await sock.sendMessage(sender, { text: "❌ Patente no encontrada. Intenta con otra o escribe *0* para volver al menú." });
-          }
-        } else {
-          await sock.sendMessage(sender, { text: "⚠️ Patente inválida. Intenta de nuevo o escribe *0* para volver al menú." });
+        if (!esPatenteValida(userMsg)) {
+          await sock.sendMessage(sender, { text: "⚠️ Patente inválida. Intenta de nuevo o escribe *0* para volver." });
+          return;
         }
+
+        const patente = userMsg.toUpperCase();
+        const datos = buscarPatente(patente);
+
+        if (!datos) {
+          await sock.sendMessage(sender, { text: "❌ Patente no encontrada. Intenta con otra o escribe *0* para volver." });
+          return;
+        }
+
+        let textoNotificacion = "";
+
+        if (estado.opcion === "1") {
+          textoNotificacion = `🔔 *Notificación de salida requerida*\nHola, soy *PerBot*. Se necesita que muevas tu vehículo *${patente}* para permitir la salida. Gracias.`;
+        } else {
+          textoNotificacion = `🚨 *Alerta de tu vehículo*\nHola, soy *PerBot*. Se ha reportado un problema con tu vehículo *${patente}* (luces encendidas, robo, etc.). Por favor, revisa tu auto.`;
+        }
+
+        await sock.sendMessage(datos.numero, { text: textoNotificacion });
+
+        await sock.sendMessage(sender, {
+          text: `✅ El propietario fue notificado correctamente.\n\n📄 *Patente:* ${patente}\n👤 *Dueño:* ${datos.owner}\n\nEscribe *0* para volver al menú.`
+        });
+
+        estadoUsuarios[sender] = { paso: "menu" };
         break;
 
       default:
