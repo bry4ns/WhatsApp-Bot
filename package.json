@@ -1,0 +1,14 @@
+{
+  "name": "perbot",
+  "version": "1.0.0",
+  "main": "bot4.js",
+  "type": "module",
+  "scripts": {
+    "start": "node bot4.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.6.0",
+    "better-sqlite3": "^8.0.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
