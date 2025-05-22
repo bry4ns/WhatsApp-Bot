@@ -2,7 +2,6 @@
   "name": "perbot",
   "version": "1.0.0",
   "main": "bot4.js",
-  "type": "module",
   "scripts": {
     "start": "node bot4.js"
   },
